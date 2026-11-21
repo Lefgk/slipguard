@@ -1,0 +1,31 @@
+# Slither report — SlipGuard (22 Nov 2026)
+
+Command: slither . --filter-paths 'lib|test|script|src/mocks|MockUSDC|MockWETH' --exclude-dependencies
+
+Summary: 0 high, 5 medium, 8 low, 4 informational.
+The 5 medium findings were reviewed and accepted:
+
+- divide-before-multiply in `_currentWindow` is the intended fixed 24h window alignment (same pattern as Agent Spend Controls).
+- strict equality against 0 is intentional (no policy, no ETH to wrap).
+- unused `startedAt` from Chainlink `latestRoundData` is unused on purpose; `answer`, `updatedAt` and `answeredInRound` are checked and stale/invalid prices fail closed.
+
+INFO:Detectors:
+Detector: divide-before-multiply
+SlipGuardVault._currentWindow(SlipGuardVault.Agent) (src/SlipGuardVault.sol#350-359) performs a multiplication on the result of a division:
+	- elapsed = (block.timestamp - ws) / PERIOD (src/SlipGuardVault.sol#355)
+	- ws = uint64(uint256(ws) + elapsed * PERIOD) (src/SlipGuardVault.sol#356)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#divide-before-multiply
+INFO:Detectors:
+Detector: incorrect-equality
+SlipGuardVault._currentWindow(SlipGuardVault.Agent) (src/SlipGuardVault.sol#350-359) uses a dangerous strict equality:
+	- ws == 0 (src/SlipGuardVault.sol#353)
+SlipGuardVault.spendableUsdNow(address) (src/SlipGuardVault.sol#324-332) uses a dangerous strict equality:
+	- a.dailyCapUsd == 0 (src/SlipGuardVault.sol#326)
+SlipGuardVault.wrapETH() (src/SlipGuardVault.sol#149-154) uses a dangerous strict equality:
+	- amount == 0 (src/SlipGuardVault.sol#151)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities
+INFO:Detectors:
+Detector: unused-return
+SlipGuardVault._price(address) (src/SlipGuardVault.sol#456-465) ignores return value by (roundId,answer,None,updatedAt,answeredInRound) = AggregatorV3Interface(f.aggregator).latestRoundData() (src/SlipGuardVault.sol#459-460)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#unused-return
+INFO:Slither:. analyzed (27 contracts with 64 detectors), 5 result(s) found
