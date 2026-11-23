@@ -5,7 +5,7 @@
     "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
   },
   "8453": {
-    "factory": "",
+    "factory": "0x51e0ae4e704be5377fcec1d555d30baad065f161",
     "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "weth": "0x4200000000000000000000000000000000000006"
   },
