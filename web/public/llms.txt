@@ -1,0 +1,14 @@
+# Slipguard
+
+This site is the human web UI for Slipguard on Base (chainId 8453).
+
+- Contract (factory): https://basescan.org/address/0x51e0ae4e704be5377fcec1d555d30baad065f161
+- Sourcify: https://repo.sourcify.dev/8453/0x51e0ae4e704be5377fcec1d555d30baad065f161/
+- Source: https://github.com/Lefgk/slipguard
+- Site: https://lefgk.github.io/slipguard/
+
+Agents should use Agent Dapps MCP to read state and to build unsigned transactions for agent-facing functions. The MCP never holds private keys and never broadcasts transactions.
+
+Local MCP (stdio): npx agent-dapps-mcp. Remote Streamable HTTP MCP is a Cloudflare Worker; the production URL will be published after deploy. The server never holds keys and never broadcasts. Contact: lg.playstudio@gmail.com
+
+Contact: lg.playstudio@gmail.com
