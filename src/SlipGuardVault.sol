@@ -29,6 +29,9 @@ contract SlipGuardVault is Ownable2Step, Pausable, ReentrancyGuard {
     uint16 public constant MAX_SLIPPAGE_BPS = 2_000; // owner cannot grant more than 20%
     uint64 public constant PERIOD = 1 days;
     address public constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
+    /// @notice Chainlink L2 sequencer uptime feed on Base; used only when deployed on chain 8453.
+    address public constant BASE_SEQUENCER_FEED = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
+    uint256 public constant SEQUENCER_GRACE = 1 hours;
 
     struct Agent {
         bool active;
@@ -57,6 +60,8 @@ contract SlipGuardVault is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     address public immutable weth;
+    /// @notice address(0) on chains without a sequencer (Ethereum, anvil).
+    address public immutable sequencerFeed;
     address public guardian;
     /// @notice When true, `executeSwap` also grants a one-shot Permit2 allowance to the router
     ///         (needed for Uniswap Universal Router). Off by default.
@@ -119,6 +124,8 @@ contract SlipGuardVault is Ownable2Step, Pausable, ReentrancyGuard {
     error InvalidOracleMinOut();
     error EthTransferFailed();
     error AmountTooLargeForPermit2();
+    error SequencerDown();
+    error SequencerGracePeriod();
 
     modifier onlyOwnerOrGuardian() {
         if (msg.sender != owner() && msg.sender != guardian) revert NotOwnerOrGuardian();
@@ -128,6 +135,7 @@ contract SlipGuardVault is Ownable2Step, Pausable, ReentrancyGuard {
     constructor(address initialOwner, address weth_) Ownable(initialOwner) {
         if (weth_ == address(0)) revert ZeroAddress();
         weth = weth_;
+        sequencerFeed = block.chainid == 8453 ? BASE_SEQUENCER_FEED : address(0);
     }
 
     receive() external payable {
@@ -456,12 +464,22 @@ contract SlipGuardVault is Ownable2Step, Pausable, ReentrancyGuard {
     function _price(address token) internal view returns (uint256 price, uint8 priceDec) {
         Feed memory f = feeds[token];
         if (f.aggregator == address(0)) revert NoFeed();
+        _checkSequencer();
         (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) =
             AggregatorV3Interface(f.aggregator).latestRoundData();
         if (answer <= 0 || updatedAt == 0 || answeredInRound < roundId || block.timestamp > updatedAt + f.maxStale) {
             revert StaleOrInvalidPrice();
         }
         return (uint256(answer), f.decimals);
+    }
+
+    /// @dev Audit 2026-11-23 M-01: refuse prices while the L2 sequencer is down or just restarted.
+    function _checkSequencer() internal view {
+        address sf = sequencerFeed;
+        if (sf == address(0)) return;
+        (, int256 answer, uint256 startedAt,,) = AggregatorV3Interface(sf).latestRoundData();
+        if (answer != 0) revert SequencerDown();
+        if (startedAt == 0 || block.timestamp - startedAt <= SEQUENCER_GRACE) revert SequencerGracePeriod();
     }
 
     /// @dev USD value with 8 decimals ($1 = 1e8).

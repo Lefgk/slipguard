@@ -30,7 +30,7 @@ See [SPEC.md](SPEC.md) for the problem, choices and scope, and [DEPLOY.md](DEPLO
 - `revokeAgent(agent)` (owner or guardian) bumps the agent's epoch, so all of its allowlist entries die at once.
 - `pause()` can be called by the owner or guardian, and `unpause()` by the owner only. `withdraw()` / `withdrawETH()` are owner only and work while paused.
 - `setPermit2Enabled(true)` is required before Universal Router swaps (Permit2 at `0x000000000022D473030F116dDEE9F6B43aC78BA3`). SwapRouter02 works without it.
-- Feeds are set with `setFeed(token, aggregator, maxStale)`. Missing or stale feeds fail closed.
+- Feeds are set with `setFeed(token, aggregator, maxStale)`. Missing or stale feeds fail closed. On Base the vault also checks the Chainlink L2 sequencer uptime feed and refuses prices while it is down or within 1h of a restart.
 - Ownership uses `Ownable2Step`, so a Safe can be the owner.
 
 ## Run the dapp
