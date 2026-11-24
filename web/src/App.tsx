@@ -1,83 +1,47 @@
 import { useMemo, useState } from "react";
-import {
-  useAccount,
-  useChainId,
-  useConnect,
-  useDisconnect,
-  usePublicClient,
-  useReadContract,
-  useSwitchChain,
-  useWriteContract,
-  useBalance,
-} from "wagmi";
+import { useAccount, useBalance, useChainId, usePublicClient, useReadContract } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { erc20Abi, formatUnits, isAddress, parseUnits, type Address } from "viem";
 import { slipGuardVaultAbi, slipGuardVaultFactoryAbi } from "./abi";
 import { deployments, known } from "./config";
+import { Addr, Empty, Hint, Loading, Shell, short, useTx } from "./ui";
 
-const short = (a?: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "");
 const usd8 = (s: string) => parseUnits(s || "0", 8);
 const fmtUsd = (v?: bigint) => (v === undefined ? "…" : `$${formatUnits(v, 8)}`);
 
 export default function App() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const { connect, connectors } = useConnect();
-  const { disconnect } = useDisconnect();
-  const { switchChain, chains } = useSwitchChain();
   const dep = deployments[chainId] ?? {};
   const [vault, setVault] = useState<Address | "">("");
 
   return (
-    <div className="wrap">
-      <h1>SlipGuard</h1>
-      <div className="muted">
-        On-chain swap limits for AI agents: token and router allowlists, Chainlink max slippage, per-tx and daily
-        USD caps, expiry, instant pause and revoke. Prototype — not audited. Ethereum, Base and local anvil.
-      </div>
-
-      <div className="card">
-        <h2>Wallet</h2>
-        {!isConnected ? (
-          <div className="row">
-            {connectors.map((c) => (
-              <button key={c.uid} onClick={() => connect({ connector: c })}>
-                Connect {c.name}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="row">
-            <span>
-              Connected <code>{address}</code>
-            </span>
-            <button className="ghost" onClick={() => disconnect()}>
-              Disconnect
-            </button>
-          </div>
-        )}
-        <div className="row">
-          {chains.map((c) => (
-            <button key={c.id} className={c.id === chainId ? "" : "ghost"} onClick={() => switchChain({ chainId: c.id })}>
-              {c.name}
-            </button>
-          ))}
-        </div>
-        {!deployments[chainId] && <div className="warn">Unsupported chain: use Ethereum, Base or local anvil.</div>}
-        {deployments[chainId] && !dep.factory && (
-          <div className="warn">
-            <strong>Not deployed yet</strong> on this chain — the factory address is empty. Core flows stay disabled
-            until you deploy (<code>make deploy-mainnet</code> or <code>make deploy-base</code>), which writes the
-            address into <code>web/src/deployments.json</code>. You can still paste an existing vault address below
-            after connecting.
-          </div>
-        )}
-        {deployments[chainId]?.live && dep.factory && (
-          <div className="warn">
-            Live chain with real funds. This contract is NOT audited — only deposit amounts you can afford to lose.
-          </div>
-        )}
-      </div>
+    <Shell
+      title="SlipGuard"
+      tagline="Swap limits for AI agents, enforced on-chain. You fund your own vault; the agent can only swap tokens you allow, through routers you allow, within a per-swap and a daily USD cap, and never at a price worse than the Chainlink price minus your slippage limit. It can never withdraw."
+      steps={[
+        "Create a vault you own, deposit USDC or WETH and set the price feeds.",
+        "Grant an agent key: expiry, max slippage, per-swap and daily caps, allowed tokens and routers.",
+        "The agent swaps inside those limits. Swap output stays in the vault.",
+        "Pause, revoke or withdraw at any time.",
+      ]}
+      contractLabel="Vault factory"
+      contractOf={(id) => deployments[id]?.factory}
+      refs={[
+        { label: "USDC", address: dep.usdc },
+        { label: "WETH", address: dep.weth },
+        { label: "Chainlink ETH/USD", address: known[chainId]?.ethUsd },
+        { label: "Chainlink USDC/USD", address: known[chainId]?.usdcUsd },
+      ]}
+      risk={
+        <>
+          <strong>Real funds.</strong> This contract is not audited. Deposited tokens can be swapped by the agent you
+          grant, within its caps and slippage limit, through the routers you allow. Only deposit amounts you can
+          afford to lose.
+        </>
+      }
+    >
+      {!isConnected && <Empty>Connect a wallet to create a vault or manage one you already own.</Empty>}
 
       {isConnected && address && (
         <>
@@ -91,28 +55,8 @@ export default function App() {
           )}
         </>
       )}
-    </div>
+    </Shell>
   );
-}
-
-function useTx() {
-  const { writeContractAsync } = useWriteContract();
-  const client = usePublicClient();
-  const [status, setStatus] = useState("");
-  const run = async (label: string, fn: () => Promise<`0x${string}`>) => {
-    try {
-      setStatus(`${label}: confirm in wallet…`);
-      const hash = await fn();
-      setStatus(`${label}: pending ${short(hash)}`);
-      await client!.waitForTransactionReceipt({ hash });
-      setStatus(`${label}: confirmed ✓`);
-      return true;
-    } catch (e) {
-      setStatus(`${label}: ${(e as Error).message.split("\n")[0]}`);
-      return false;
-    }
-  };
-  return { writeContractAsync, run, status };
 }
 
 function VaultPicker({
@@ -135,47 +79,54 @@ function VaultPicker({
     query: { enabled: !!factory },
   });
   const vaults = (list.data as Address[] | undefined) ?? [];
-  const [paste, setPaste] = useState("");
 
   return (
     <div className="card">
-      <h2>Vault</h2>
+      <h2>1. Choose a vault</h2>
+      <p className="muted">A vault is your own contract. It holds the tokens and enforces the agent limits.</p>
+      <div className="field-label">Your vaults on this network</div>
+      {!factory ? (
+        <Empty>No factory on this network, so vaults cannot be listed or created here.</Empty>
+      ) : list.isLoading ? (
+        <Loading>Looking up your vaults…</Loading>
+      ) : vaults.length > 0 ? (
+        <div className="row">
+          {vaults.map((v) => (
+            <button key={v} className={v === vault ? "seg seg-on" : "seg"} aria-pressed={v === vault} onClick={() => setVault(v)}>
+              <code>{short(v)}</code>
+              <span className="seg-sub">{v === vault ? "selected" : "select"}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <Empty>This wallet has no vaults yet. Create one below, or paste the address of a vault you want to inspect.</Empty>
+      )}
       <div className="row">
         <button
           disabled={!factory}
-          onClick={() =>
-            run("create vault", () =>
+          onClick={async () => {
+            const ok = await run("Create vault", () =>
               writeContractAsync({ address: factory!, abi: slipGuardVaultFactoryAbi, functionName: "createVault" }),
-            ).then((ok) => {
-              if (ok) void list.refetch();
-            })
-          }
+            );
+            if (ok) {
+              const next = ((await list.refetch()).data as Address[] | undefined) ?? [];
+              if (next.length) setVault(next[next.length - 1]);
+            }
+          }}
         >
-          Create vault
+          Create new vault
         </button>
-        <select value={vault} onChange={(e) => setVault(e.target.value as Address)}>
-          <option value="">Select a vault…</option>
-          {vaults.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="row">
         <label>
-          Or paste a vault address
-          <input value={paste} onChange={(e) => setPaste(e.target.value)} placeholder="0x…" />
+          Or open a vault by address
+          <input value={vault} placeholder="0x…" spellCheck={false} onChange={(e) => setVault(e.target.value.trim() as Address)} />
         </label>
-        <button
-          className="ghost"
-          disabled={!isAddress(paste)}
-          onClick={() => setVault(paste as Address)}
-        >
-          Use
-        </button>
       </div>
-      <div className="muted">{status}</div>
+      {vault && !isAddress(vault) && <div className="bad muted">That is not a valid address (0x followed by 40 hex characters).</div>}
+      <Hint>
+        “Create new vault” deploys a vault contract owned by your connected wallet. One transaction, gas only — no
+        funds move.
+      </Hint>
+      {status}
     </div>
   );
 }
@@ -192,7 +143,7 @@ function VaultOverview({
   chainId: number;
 }) {
   const { address } = useAccount();
-  const { writeContractAsync, run, status } = useTx();
+  const { writeContractAsync, run, status, safe, fail } = useTx();
   const feeds = known[chainId];
   const [amt, setAmt] = useState("100");
   const [token, setToken] = useState<"usdc" | "weth">("usdc");
@@ -222,22 +173,40 @@ function VaultOverview({
   const approveAndDeposit = async () => {
     if (!tokenAddr) return;
     const value = parseUnits(amt || "0", decimals);
-    const ok = await run("approve", () =>
+    if (value === 0n) return fail("Amount must be greater than 0.");
+    const ok = await run(`Approve ${token.toUpperCase()}`, () =>
       writeContractAsync({ address: tokenAddr, abi: erc20Abi, functionName: "approve", args: [vault, value] }),
     );
     if (!ok) return;
-    await run("deposit", () =>
+    await run("Deposit", () =>
       writeContractAsync({ address: vault, abi: slipGuardVaultAbi, functionName: "deposit", args: [tokenAddr, value] }),
     );
   };
 
   return (
     <div className="card">
-      <h2>Balances & controls</h2>
-      <div className="muted">
-        Owner <code>{short(owner.data as string)}</code> · {paused.data ? <span className="bad">paused</span> : <span className="ok">active</span>} · Permit2{" "}
-        {permit2.data ? "on" : "off"}
-      </div>
+      <h2>2. Balances and controls (owner)</h2>
+      <dl className="dl">
+        <dt>Vault</dt>
+        <dd>
+          <Addr value={vault} full />
+        </dd>
+        <dt>Owner</dt>
+        <dd>
+          <Addr value={owner.data as string | undefined} /> {isOwner && <span className="ok">(you)</span>}
+        </dd>
+        <dt>Agent swaps</dt>
+        <dd>
+          {paused.data === undefined ? "…" : paused.data ? <span className="bad">Paused</span> : <span className="ok">Active</span>} ·
+          Permit2 {permit2.data ? "on" : "off"}
+        </dd>
+      </dl>
+      {owner.data && !isOwner && (
+        <div className="info">
+          You are not the owner of this vault, so deposits, withdrawals and settings are hidden. You can still read
+          balances and agent limits.
+        </div>
+      )}
       <table>
         <tbody>
           <tr>
@@ -256,6 +225,7 @@ function VaultOverview({
       </table>
       {isOwner && (
         <>
+          <h3>Deposit and withdraw</h3>
           <div className="row">
             <label>
               Token
@@ -266,14 +236,17 @@ function VaultOverview({
             </label>
             <label>
               Amount
-              <input value={amt} onChange={(e) => setAmt(e.target.value)} />
+              <input value={amt} inputMode="decimal" onChange={(e) => setAmt(e.target.value)} />
             </label>
-            <button onClick={approveAndDeposit}>Deposit</button>
+            <button disabled={!tokenAddr} onClick={safe(approveAndDeposit)}>
+              Approve + deposit
+            </button>
             <button
               className="ghost"
+              disabled={!tokenAddr}
               onClick={() =>
                 tokenAddr &&
-                run("withdraw", () =>
+                run("Withdraw", () =>
                   writeContractAsync({
                     address: vault,
                     abi: slipGuardVaultAbi,
@@ -286,11 +259,17 @@ function VaultOverview({
               Withdraw
             </button>
           </div>
+          <Hint>
+            Deposit asks twice: an approval for exactly this amount, then the deposit, which moves the tokens from your
+            wallet into the vault. Withdraw sends that amount from the vault back to your connected wallet and works
+            even while paused.
+          </Hint>
+          <h3>Setup and safety</h3>
           <div className="row">
             <button
               className="ghost"
               onClick={() =>
-                run("wrap ETH", () => writeContractAsync({ address: vault, abi: slipGuardVaultAbi, functionName: "wrapETH" }))
+                run("Wrap ETH", () => writeContractAsync({ address: vault, abi: slipGuardVaultAbi, functionName: "wrapETH" }))
               }
             >
               Wrap vault ETH
@@ -299,7 +278,7 @@ function VaultOverview({
               <button
                 className="ghost"
                 onClick={() =>
-                  run("set ETH/USD feed", () =>
+                  run("Set ETH/USD feed", () =>
                     writeContractAsync({
                       address: vault,
                       abi: slipGuardVaultAbi,
@@ -316,7 +295,7 @@ function VaultOverview({
               <button
                 className="ghost"
                 onClick={() =>
-                  run("set USDC/USD feed", () =>
+                  run("Set USDC/USD feed", () =>
                     writeContractAsync({
                       address: vault,
                       abi: slipGuardVaultAbi,
@@ -332,7 +311,7 @@ function VaultOverview({
             <button
               className="ghost"
               onClick={() =>
-                run("toggle Permit2", () =>
+                run(permit2.data ? "Disable Permit2" : "Enable Permit2", () =>
                   writeContractAsync({
                     address: vault,
                     abi: slipGuardVaultAbi,
@@ -347,7 +326,7 @@ function VaultOverview({
             <button
               className={paused.data ? "ghost" : "danger"}
               onClick={() =>
-                run(paused.data ? "unpause" : "pause", () =>
+                run(paused.data ? "Unpause" : "Pause", () =>
                   writeContractAsync({
                     address: vault,
                     abi: slipGuardVaultAbi,
@@ -356,12 +335,18 @@ function VaultOverview({
                 )
               }
             >
-              {paused.data ? "Unpause" : "Pause"}
+              {paused.data ? "Unpause" : "Pause agents"}
             </button>
           </div>
+          <Hint>
+            The price feeds are the Chainlink oracles the vault uses to value swaps and enforce slippage; an agent
+            cannot swap a token until its feed is set. “Wrap vault ETH” converts ETH held by the vault to WETH inside
+            the vault. Permit2 lets allowed routers pull tokens through Uniswap's Permit2 contract. Pause blocks every
+            agent swap at once; withdrawals still work. None of these move funds out of the vault.
+          </Hint>
         </>
       )}
-      <div className="muted">{status}</div>
+      {status}
     </div>
   );
 }
@@ -377,7 +362,7 @@ function GrantAgent({
   weth?: Address;
   chainId: number;
 }) {
-  const { writeContractAsync, run, status } = useTx();
+  const { writeContractAsync, run, status, safe, fail } = useTx();
   const routers = known[chainId]?.routers ?? [];
   const [agent, setAgent] = useState("");
   const [hours, setHours] = useState("168");
@@ -390,19 +375,25 @@ function GrantAgent({
 
   const grant = async (tighten: boolean) => {
     if (!isAddress(agent)) return;
-    const expiry = BigInt(Math.floor(Date.now() / 1000) + Number(hours || "0") * 3600);
+    const h = Number(hours);
+    if (!Number.isFinite(h) || h <= 0) return fail("Expiry must be a number of hours greater than 0.");
+    const bps = Number(slip);
+    if (!Number.isInteger(bps) || bps < 0 || bps > 10_000) return fail("Max slippage must be a whole number of basis points (50 = 0.5%).");
+    const expiry = BigInt(Math.floor(Date.now() / 1000 + h * 3600));
+    const perTx = usd8(maxTx);
+    const perDay = usd8(daily);
     const fn = tighten ? "setPolicy" : "grantAgent";
-    const ok = await run(tighten ? "tighten" : "grant", () =>
+    const ok = await run(tighten ? "Update policy" : "Grant agent", () =>
       writeContractAsync({
         address: vault,
         abi: slipGuardVaultAbi,
         functionName: fn,
-        args: [agent as Address, expiry, Number(slip || "0"), usd8(maxTx), usd8(daily)],
+        args: [agent as Address, expiry, bps, perTx, perDay],
       }),
     );
     if (!ok || tighten) return;
     if (allowUsdc && usdc) {
-      await run("allow USDC", () =>
+      await run("Allow USDC", () =>
         writeContractAsync({
           address: vault,
           abi: slipGuardVaultAbi,
@@ -412,7 +403,7 @@ function GrantAgent({
       );
     }
     if (allowWeth && weth) {
-      await run("allow WETH", () =>
+      await run("Allow WETH", () =>
         writeContractAsync({
           address: vault,
           abi: slipGuardVaultAbi,
@@ -423,7 +414,7 @@ function GrantAgent({
     }
     for (const r of routers) {
       if (!picked[r.address]) continue;
-      await run(`allow ${r.label}`, () =>
+      await run(`Allow ${r.label}`, () =>
         writeContractAsync({
           address: vault,
           abi: slipGuardVaultAbi,
@@ -436,22 +427,26 @@ function GrantAgent({
 
   return (
     <div className="card">
-      <h2>Grant / tighten agent</h2>
+      <h2>3. Agent key (owner)</h2>
+      <p className="muted">
+        The agent can only swap the ticked tokens through the ticked routers, inside these limits. It can never
+        withdraw.
+      </p>
       <div className="row">
         <label>
           Agent address
-          <input value={agent} onChange={(e) => setAgent(e.target.value)} placeholder="0x…" />
+          <input value={agent} spellCheck={false} onChange={(e) => setAgent(e.target.value.trim())} placeholder="0x…" />
         </label>
         <label>
           Expiry (hours)
           <input value={hours} onChange={(e) => setHours(e.target.value)} />
         </label>
         <label>
-          Max slippage (bps)
+          Max slippage (bps, 50 = 0.5%)
           <input value={slip} onChange={(e) => setSlip(e.target.value)} />
         </label>
         <label>
-          Max per tx (USD)
+          Max per swap (USD)
           <input value={maxTx} onChange={(e) => setMaxTx(e.target.value)} />
         </label>
         <label>
@@ -459,7 +454,8 @@ function GrantAgent({
           <input value={daily} onChange={(e) => setDaily(e.target.value)} />
         </label>
       </div>
-      <div className="row">
+      <div className="field-label">Tokens the agent may swap</div>
+      <div className="row checks">
         <label>
           <input type="checkbox" checked={allowUsdc} onChange={(e) => setAllowUsdc(e.target.checked)} /> USDC
         </label>
@@ -467,27 +463,36 @@ function GrantAgent({
           <input type="checkbox" checked={allowWeth} onChange={(e) => setAllowWeth(e.target.checked)} /> WETH
         </label>
       </div>
+      <div className="field-label">Routers the agent may call</div>
+      {routers.length === 0 && <p className="muted">No known routers on this network. Allow routers directly on the vault contract.</p>}
       {routers.map((r) => (
-        <div className="row" key={r.address}>
+        <div className="row checks" key={r.address}>
           <label>
             <input
               type="checkbox"
               checked={!!picked[r.address]}
               onChange={(e) => setPicked((p) => ({ ...p, [r.address]: e.target.checked }))}
             />{" "}
-            {r.label} <code>{short(r.address)}</code>
+            {r.label}
           </label>
+          <Addr value={r.address} />
         </div>
       ))}
       <div className="row">
-        <button disabled={!isAddress(agent)} onClick={() => grant(false)}>
+        <button disabled={!isAddress(agent)} onClick={safe(() => grant(false))}>
           Grant agent
         </button>
-        <button className="ghost" disabled={!isAddress(agent)} onClick={() => grant(true)}>
-          Tighten policy
+        <button className="ghost" disabled={!isAddress(agent)} onClick={safe(() => grant(true))}>
+          Update policy only
         </button>
       </div>
-      <div className="muted">{status}</div>
+      {agent && !isAddress(agent) && <div className="bad muted">Agent is not a valid address.</div>}
+      <Hint>
+        “Grant agent” is several transactions in a row: the grant with these limits, then one per ticked token and
+        router. Granting an existing agent again replaces its limits and adds the ticked tokens and routers. “Update policy only” is one transaction
+        that changes expiry, slippage and caps for an existing agent and keeps its allowlists. No funds move.
+      </Hint>
+      {status}
     </div>
   );
 }
@@ -554,17 +559,17 @@ function AgentView({ vault, usdc, weth }: { vault: Address; usdc?: Address; weth
 
   return (
     <div className="card">
-      <h2>View agent / recent swaps</h2>
+      <h2>4. Agent limits and recent swaps</h2>
       <div className="row">
         <label>
-          Agent
-          <input value={agent} onChange={(e) => setAgent(e.target.value)} placeholder="0x…" />
+          Agent address
+          <input value={agent} spellCheck={false} onChange={(e) => setAgent(e.target.value.trim())} placeholder="0x…" />
         </label>
         <button
           className="danger"
           disabled={!enabled}
           onClick={() =>
-            run("revoke", () =>
+            run("Revoke agent", () =>
               writeContractAsync({
                 address: vault,
                 abi: slipGuardVaultAbi,
@@ -574,15 +579,20 @@ function AgentView({ vault, usdc, weth }: { vault: Address; usdc?: Address; weth
             )
           }
         >
-          Revoke
+          Revoke agent
         </button>
       </div>
+      <Hint tone="danger">
+        Revoke removes this agent's swap rights immediately (owner or guardian only). Funds stay in the vault.
+      </Hint>
+      {!enabled && <Empty>Enter an agent address to see its limits.</Empty>}
+      {enabled && info.isLoading && <Loading />}
       {a && (
         <table>
           <tbody>
             <tr>
               <td>Status</td>
-              <td>{a[0] ? <span className="ok">active</span> : <span className="bad">revoked</span>}</td>
+              <td>{a[0] ? <span className="ok">Active</span> : <span className="bad">Not active (never granted or revoked)</span>}</td>
             </tr>
             <tr>
               <td>Expiry</td>
@@ -611,13 +621,15 @@ function AgentView({ vault, usdc, weth }: { vault: Address; usdc?: Address; weth
           </tbody>
         </table>
       )}
-      <h2 style={{ marginTop: 16 }}>Recent swaps</h2>
-      {logs.data && logs.data.length === 0 && <div className="muted">No swaps in the last ~49k blocks.</div>}
+      <h3>Recent swaps</h3>
+      {logs.isLoading && <Loading>Reading swap events…</Loading>}
+      {logs.isError && <div className="muted">Could not read swap events from this RPC.</div>}
+      {logs.data && logs.data.length === 0 && <Empty>No swaps by any agent in the last ~49,000 blocks.</Empty>}
       {logs.data && logs.data.length > 0 && (
         <table>
           <thead>
             <tr>
-              <th>Block</th>
+              <th>Tx</th>
               <th>Agent</th>
               <th>In</th>
               <th>Out</th>
@@ -630,9 +642,11 @@ function AgentView({ vault, usdc, weth }: { vault: Address; usdc?: Address; weth
               const tout = decOf[(l.args.tokenOut ?? "").toLowerCase()];
               return (
                 <tr key={`${l.transactionHash}-${l.logIndex}`}>
-                  <td>{l.blockNumber?.toString()}</td>
                   <td>
-                    <code>{short(l.args.agent)}</code>
+                    <Addr value={l.transactionHash ?? undefined} kind="tx" copy={false} />
+                  </td>
+                  <td>
+                    <Addr value={l.args.agent} copy={false} />
                   </td>
                   <td>
                     {l.args.amountIn !== undefined ? formatUnits(l.args.amountIn, tin?.decimals ?? 18) : ""} {tin?.label ?? short(l.args.tokenIn)}
@@ -647,7 +661,7 @@ function AgentView({ vault, usdc, weth }: { vault: Address; usdc?: Address; weth
           </tbody>
         </table>
       )}
-      <div className="muted">{status}</div>
+      {status}
     </div>
   );
 }
